@@ -1,0 +1,6 @@
+Revision history for Perl extension SQLite::VirtualTable.
+
+0.01  Sun Jul  9 22:36:54 2006
+	- original version; created by h2xs 1.23 with options
+		-AX -n SQLite::VirtualTable
+
