@@ -58,7 +58,7 @@ sub DECLARE_SQL {
     my $self = shift;
     my $desc = join(', ', @{$self->{columns}});
     my $decl = "CREATE TABLE $self->{table} ($desc)";
-    warn "decl: $decl\n";
+    # warn "decl: $decl\n";
     $decl;
 }
 

@@ -1,6 +1,6 @@
 package SQLite::VirtualTable;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use strict;
 use warnings;
@@ -39,7 +39,6 @@ sub _do_nothing {}
 
 1;
 __END__
-# Below is stub documentation for your module. You'd better edit it!
 
 =head1 NAME
 
@@ -87,7 +86,7 @@ In order to provide a new backend, a Perl module derived from
 SQLite::VirtualTable has to be created and a set of methods defined.
 
 These methods are just the Perl equivalents of the C callbacks defined
-on the SQLite Virtual Table specification available from here
+on the SQLite Virtual Table specification available from
 L<http://www.sqlite.org/cvstrac/wiki?p=VirtualTableMethods>.
 
 To indicate failure they should C<die>.
@@ -106,7 +105,8 @@ They have to return a new object representing the virtual table.
 
 C<@args> contains the arguments included by the user on the SQL
 statement after the module name. They can be quoted and you would
-probably want to unquote them (see L<SQLite::VirtualTable/unquote>).
+probably want to unquote them (see
+L<SQLite::VirtualTable::Util/unquote>).
 
 =item $vt->DECLARE_SQL()
 
@@ -127,7 +127,7 @@ C<sqlite3_declare_vtab()> to register the virtual table.
 This method is called when the user runs the SQL C<DROP TABLE>
 statement on the virtual table.
 
-Note that the equivalent C callback is C<xDestroy> but C<DESTROY> is
+Note that the equivalent C callback is C<xDestroy> but C<DESTROY> was
 already used in Perl for other purposes.
 
 =item $vt->DISCONNECT()
@@ -207,6 +207,13 @@ This method is called to advance the cursor to the next row.
 This method has to return a true value when the rows from the cursor
 have been exhausted.
 
+=item $vt->UPDATE($delete_rowid, $new_rowid, @values)
+
+This method is called when C<INSERT>, C<UPDATE> and C<DELETE> actions
+are carried over the virtual table.
+
+See the docs for the equivalent C callback for the details.
+
 =item $vt->BEGIN_TRANSACTION()
 
 =item $vt->SYNC_TRANSACTION()
@@ -219,9 +226,7 @@ These methods are called on transaction related events.
 
 The default implementations from C<SQLite::VirtualTable> do nothing.
 
-
 =back
-
 
 =head1 INSTALLATION
 
@@ -304,10 +309,6 @@ lots of bugs are likely to appear.
 
 The API could change in the future (well, actually, it is expected to
 change!!!).
-
-Update operation is not supported yet.
-
-Callbacks for transaction related operations are not supported yet.
 
 Only tested on Linux.
 

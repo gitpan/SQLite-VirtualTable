@@ -27,6 +27,7 @@ WriteMakefile( NAME => 'SQLite::VirtualTable',
                AUTHOR => 'Salvador Fandino <sfandino@yahoo.com>',
                INC => "-I$sqlite_source -I$sqlite_source/src",
                OBJECT => 'perlvtab.o',
+               OPTIMIZE => '-g3 -O0',
                dynamic_lib => { OTHERLDFLAGS => '`$(PERL) -MExtUtils::Embed -e ldopts`' }
              );
 
