@@ -146,13 +146,31 @@ perlConnect(sqlite3 *db,
     return perlCreateOrConnect(db, pAux, argc, argv, ppVtab, 0);
 }
 
+#define SVTM_BEGIN_TRANSACTION 0
+#define SVTM_SYNC_TRANSACTION 1
+#define SVTM_COMMIT_TRANSACTION 2
+#define SVTM_ROLLBACK_TRANSACTION 3
+#define SVTM_DROP 4
+#define SVTM_DISCONNECT 5
+#define SVTM__TOP 6
+
+static char *svtm_name[] = { "BEGIN_TRANSACTION",
+                             "SYNC_TRANSACTION",
+                             "COMMIT_TRANSACTION",
+                             "ROLLBACK_TRANSACTION"
+                             "DROP",
+                             "DISCONNECT",
+                            NULL, };
+
 static int
-perlDestroyOrDisconnect(sqlite3_vtab *vtab, int destroy) {
+perlSimpleVtabMethod(sqlite3_vtab *vtab, int select) {
     my_dTHX(((perl_vtab*)vtab)->perl);
     dSP;
     SV *vtabsv = ((perl_vtab*)vtab)->sv;
     int count;
     int rc = SQLITE_OK;
+
+    assert(select < SVTM__TOP);
 
     ENTER;
     SAVETMPS;
@@ -160,7 +178,7 @@ perlDestroyOrDisconnect(sqlite3_vtab *vtab, int destroy) {
     PUSHMARK(SP);
     PUSHs(vtabsv);
     PUTBACK;
-    count = call_method(destroy ? "DROP" : "DISCONNECT", G_VOID|G_EVAL);
+    count = call_method(svtm_name[select], G_VOID|G_EVAL);
     SPAGAIN;
     SP -= count;
     PUTBACK;
@@ -169,7 +187,7 @@ perlDestroyOrDisconnect(sqlite3_vtab *vtab, int destroy) {
         sqlite3Error(((perl_vtab *)vtab)->db,
                      SQLITE_ERROR, "%s::%s method failed: %s",
                      sv_reftype(vtabsv, 1),
-                     destroy ? "DROP" : "DISCONNECT",
+                     svtm_name[select],
                      SvPVutf8_nolen(ERRSV));
         rc = SQLITE_ERROR;
         goto cleanup;
@@ -186,15 +204,34 @@ cleanup:
 }
 
 static int
+perlBegin(sqlite3_vtab *vtab) {
+    return perlSimpleVtabMethod(vtab, SVTM_BEGIN_TRANSACTION);
+}
+
+static int
+perlSync(sqlite3_vtab *vtab) {
+    return perlSimpleVtabMethod(vtab, SVTM_SYNC_TRANSACTION);
+}
+
+static int
+perlCommit(sqlite3_vtab *vtab) {
+    return perlSimpleVtabMethod(vtab, SVTM_COMMIT_TRANSACTION);
+}
+
+static int
+perlRollback(sqlite3_vtab *vtab) {
+    return perlSimpleVtabMethod(vtab, SVTM_ROLLBACK_TRANSACTION);
+}
+
+static int
 perlDestroy(sqlite3_vtab *vtab) {
-    return perlDestroyOrDisconnect(vtab, 1);
+    return perlSimpleVtabMethod(vtab, SVTM_DROP);
 }
 
 static int
 perlDisconnect(sqlite3_vtab *vtab) {
-    return perlDestroyOrDisconnect(vtab, 0);
+    return perlSimpleVtabMethod(vtab, SVTM_DISCONNECT);
 }
-
 
 static int
 perlOpen(sqlite3_vtab *vtab, sqlite3_vtab_cursor **ppCursor) {
@@ -676,39 +713,49 @@ cleanup:
 
 
 static int
-perlUpdate(sqlite3_vtab *vtab) {
+perlUpdate(sqlite3_vtab *vtab, int argc, sqlite3_value **argv, sqlite_int64 *rowid) {
     my_dTHX(((perl_vtab*)vtab)->perl);
-    Perl_warn(aTHX_ "UPDATE not implemented\n");
-    return SQLITE_ERROR;
-}
+    dSP;
+    I32 ax;
+    SV *vtabsv = ((perl_vtab*)vtab)->sv;
+    SV *rowidsv;
+    int i;
+    int count;
+    int rc = SQLITE_OK;
 
-static int
-perlBegin(sqlite3_vtab *vtab) {
-    my_dTHX(((perl_vtab*)vtab)->perl);
-    Perl_warn(aTHX_ "BEGIN not implemented\n");
-    return SQLITE_OK;
-}
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    PUSHs(vtabsv);
+    for (i = 0; i < argc; i++)
+        PUSHs(sv_2mortal(newSVsqlite3_value(aTHX_ argv[i])));
+    PUTBACK;
+    count = call_method("UPDATE", G_SCALAR|G_EVAL);
+    SPAGAIN;
+    SP -= count;
+    PUTBACK;
 
-static int
-perlSync(sqlite3_vtab *vtab) {
-    my_dTHX(((perl_vtab*)vtab)->perl);
-    Perl_warn(aTHX_ "SYNC not implemented\n");
-    return SQLITE_OK;
-}
+    if (!count || SvTRUE(ERRSV)) {
+        Perl_warn(aTHX_ "%s::UPDATE method failed: %s\n",
+                  sv_reftype(vtabsv, 1),
+                  SvPV_nolen(ERRSV));
+        rc = SQLITE_ERROR;
+        goto cleanup;
+    }
+    
+    if (!SvOK(rowidsv))
+        *rowid = 0;
+    else if (SvUOK(rowidsv))
+        *rowid = SvUV(rowidsv);
+    else if (SvIOK(rowidsv))
+        *rowid = SvIV(rowidsv);
+    else
+        *rowid = SvNV(rowidsv);
 
-
-static int
-perlCommit(sqlite3_vtab *vtab) {
-    my_dTHX(((perl_vtab*)vtab)->perl);
-    Perl_warn(aTHX_ "COMMIT not implemented\n");
-    return SQLITE_OK;
-}
-
-static int
-perlRollback(sqlite3_vtab *vtab) {
-    my_dTHX(((perl_vtab*)vtab)->perl);
-    Perl_warn(aTHX_ "ROLLBACK not implemented\n");
-    return SQLITE_OK;
+cleanup:
+    FREETMPS;
+    LEAVE;
+    return rc;
 }
 
 sqlite3_module perlModule = {

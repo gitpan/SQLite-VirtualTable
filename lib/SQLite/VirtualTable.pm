@@ -1,6 +1,6 @@
 package SQLite::VirtualTable;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use strict;
 use warnings;
@@ -29,6 +29,13 @@ sub AUTOLOAD {
     warn $@;
     die;
 }
+
+sub _do_nothing {}
+
+*BEGIN_TRANSACTION = \&_do_nothing;
+*SYNC_TRANSACTION = \&_do_nothing;
+*COMMIT_TRANSACTION = \&_do_nothing;
+*ROLLBACK_TRANSACTION = \&_do_nothing;
 
 1;
 __END__
@@ -101,7 +108,7 @@ C<@args> contains the arguments included by the user on the SQL
 statement after the module name. They can be quoted and you would
 probably want to unquote them (see L<SQLite::VirtualTable/unquote>).
 
-=item $vt->DECLARE_SQL
+=item $vt->DECLARE_SQL()
 
 This method is called just after the C<CREATE> or C<CONNECT> method
 and has to return the SQL statement used to declare the columns and
@@ -114,6 +121,18 @@ types of the virtual table. For instance:
 
 The return value from this method is used when calling the C function
 C<sqlite3_declare_vtab()> to register the virtual table.
+
+=item $vt->DROP()
+
+This method is called when the user runs the SQL C<DROP TABLE>
+statement on the virtual table.
+
+Note that the equivalent C callback is C<xDestroy> but C<DESTROY> is
+already used in Perl for other purposes.
+
+=item $vt->DISCONNECT()
+
+This method is called when the database is closed.
 
 =item $vt->BEST_INDEX($constraints, $orderbys)
 
@@ -187,6 +206,19 @@ This method is called to advance the cursor to the next row.
 
 This method has to return a true value when the rows from the cursor
 have been exhausted.
+
+=item $vt->BEGIN_TRANSACTION()
+
+=item $vt->SYNC_TRANSACTION()
+
+=item $vt->COMMIT_TRANSACTION()
+
+=item $vt->ROLLBACK_TRANSACTION()
+
+These methods are called on transaction related events.
+
+The default implementations from C<SQLite::VirtualTable> do nothing.
+
 
 =back
 

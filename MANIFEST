@@ -9,4 +9,5 @@ ppport.h
 README
 sample/test.pl
 t/SQLite-VirtualTable.t
+t/pods.t
 META.yml                                 Module meta-data (added by MakeMaker)
