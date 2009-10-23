@@ -4,6 +4,10 @@
 #include "perl.h"
 #include "XSUB.h"
 
+#define NEED_newRV_noinc
+#define NEED_sv_2pv_nolen
+#include "ppport.h" 
+
 #include <sqlite3ext.h>
 SQLITE_EXTENSION_INIT1
 
@@ -51,8 +55,9 @@ static char *vtm_name[] = { "CREATE",
 static int
 perlCreateOrConnect(sqlite3 *db,
                     void *pAux,
-                    int argc, char **argv,
-                    sqlite3_vtab **ppVtab,
+                    int argc, const char *const *argv,
+                    sqlite3_vtab **ppVTab,
+		    char **pzErr,
                     int method) {
     my_dTHX(pAux);
     dSP;
@@ -107,9 +112,11 @@ perlCreateOrConnect(sqlite3 *db,
     tmp = ST(0);    
     if (!count || SvTRUE(ERRSV) || !SvOK(tmp)) {
         Perl_warn(aTHX_  "%s::DECLARE_SQL method failed: %s",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   SvTRUE(ERRSV) ? SvPV_nolen(ERRSV) : "method returned undef");
         rc = SQLITE_ERROR;
+	if (SvTRUE(ERRSV))
+	    *pzErr = sqlite3_mprintf("%s", SvPV_nolen(ERRSV));
         goto cleanup;
     }
 
@@ -125,7 +132,7 @@ perlCreateOrConnect(sqlite3 *db,
 #endif
 
 cleanup:
-    *ppVtab = (sqlite3_vtab *) vtab;
+    *ppVTab = (sqlite3_vtab *) vtab;
 
     FREETMPS;
     LEAVE;
@@ -136,17 +143,19 @@ cleanup:
 static int
 perlCreate(sqlite3 *db,
            void *pAux,
-           int argc, char **argv,
-           sqlite3_vtab **ppVtab) {
-    return perlCreateOrConnect(db, pAux, argc, argv, ppVtab, VTM_CREATE);
+           int argc, const char *const *argv,
+           sqlite3_vtab **ppVTab,
+	   char **pzErr) {
+    return perlCreateOrConnect(db, pAux, argc, argv, ppVTab, pzErr, VTM_CREATE);
 }
 
 static int
 perlConnect(sqlite3 *db,
            void *pAux,
-           int argc, char **argv,
-           sqlite3_vtab **ppVtab) {
-    return perlCreateOrConnect(db, pAux, argc, argv, ppVtab, VTM_CONNECT);
+           int argc, const char *const *argv,
+           sqlite3_vtab **ppVTab,
+	   char **pzErr) {
+    return perlCreateOrConnect(db, pAux, argc, argv, ppVTab, pzErr, VTM_CONNECT);
 }
 
 static int
@@ -161,7 +170,7 @@ perlSimpleVtabMethod(sqlite3_vtab *vtab, int method) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
+    XPUSHs(vtabsv);
     PUTBACK;
     count = call_method(vtm_name[method], G_VOID|G_EVAL);
     SPAGAIN;
@@ -170,7 +179,7 @@ perlSimpleVtabMethod(sqlite3_vtab *vtab, int method) {
 
     if (SvTRUE(ERRSV)) {
         Perl_warn(aTHX_ "%s::%s method failed: %s",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   vtm_name[method],
                   SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
@@ -198,7 +207,7 @@ perlDropOrDisconnect(sqlite3_vtab *vtab, int method) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
+    XPUSHs(vtabsv);
     PUTBACK;
     count = call_method(vtm_name[method], G_VOID|G_EVAL);
     SPAGAIN;
@@ -207,7 +216,7 @@ perlDropOrDisconnect(sqlite3_vtab *vtab, int method) {
 
     if (SvTRUE(ERRSV)) {
         Perl_warn(aTHX_ "%s::%s method failed: %s",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   vtm_name[method],
                   SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
@@ -269,19 +278,19 @@ perlOpen(sqlite3_vtab *vtab, sqlite3_vtab_cursor **ppCursor) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
+    XPUSHs(vtabsv);
     PUTBACK;
     count = call_method("OPEN", G_SCALAR|G_EVAL);
     SPAGAIN;
 
     SP -= count;
     ax = (SP - PL_stack_base) + 1;
-    cursv = ST(0);
     PUTBACK;
+    cursv = ST(0);
 
     if (!count || !SvOK(cursv)) {
         Perl_warn(aTHX_ "%s::OPEN method failed: %s",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   SvTRUE(ERRSV) ? SvPV_nolen(ERRSV) : "method returned undef");
         rc = SQLITE_ERROR;
         goto cleanup;
@@ -314,8 +323,8 @@ perlClose(sqlite3_vtab_cursor *cur) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
 
     PUTBACK;
     count = call_method("CLOSE", G_VOID|G_EVAL);
@@ -325,7 +334,7 @@ perlClose(sqlite3_vtab_cursor *cur) {
     PUTBACK;
 
     if (SvTRUE(ERRSV)) {
-        Perl_warn(aTHX_ "%s::CLOSE method failed: %s", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV));
+        Perl_warn(aTHX_ "%s::CLOSE method failed: %s", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
         goto cleanup;
     }
@@ -370,7 +379,7 @@ int perlBestIndex(sqlite3_vtab *vtab, sqlite3_index_info *ixinfo) {
     AV *ctrain;
     int count;
     int i;
-    int len;
+    STRLEN len;
     char *str;
     int rc = SQLITE_OK;
 
@@ -378,10 +387,10 @@ int perlBestIndex(sqlite3_vtab *vtab, sqlite3_index_info *ixinfo) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
+    XPUSHs(vtabsv);
 
     ctrain = newAV();
-    PUSHs(sv_2mortal(newRV_noinc((SV*)ctrain)));
+    XPUSHs(sv_2mortal(newRV_noinc((SV*)ctrain)));
 
     for (i = 0; i < ixinfo->nConstraint; i++) {
         HV *hv = newHV();
@@ -392,7 +401,7 @@ int perlBestIndex(sqlite3_vtab *vtab, sqlite3_index_info *ixinfo) {
     }
 
     av = newAV();
-    PUSHs(sv_2mortal(newRV_noinc((SV*)av)));
+    XPUSHs(sv_2mortal(newRV_noinc((SV*)av)));
 
     for (i = 0; i < ixinfo->nOrderBy; i++) {
         HV *hv = newHV();
@@ -404,20 +413,18 @@ int perlBestIndex(sqlite3_vtab *vtab, sqlite3_index_info *ixinfo) {
     PUTBACK;
     count = call_method("BEST_INDEX", G_ARRAY|G_EVAL);
     SPAGAIN;
-
     SP -= count;
     ax = (SP - PL_stack_base) + 1;
-
     PUTBACK;
 
     if (SvTRUE(ERRSV)) {
-        Perl_warn(aTHX_ "%s::BEST_INDEX method failed: %s\n", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV));
+        Perl_warn(aTHX_ "%s::BEST_INDEX method failed: %s\n", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
         goto cleanup;
     }
 
     if (count != 4) {
-        Perl_warn(aTHX_ "%s::BEST_INDEX method returned wrong number of values (%d, %d expected)", sv_reftype(vtabsv, 1), count, 4);
+        Perl_warn(aTHX_ "%s::BEST_INDEX method returned wrong number of values (%d, %d expected)", sv_reftype(SvRV(vtabsv), 1), count, 4);
         rc = SQLITE_ERROR;
         goto cleanup;
     }
@@ -445,7 +452,7 @@ int perlBestIndex(sqlite3_vtab *vtab, sqlite3_index_info *ixinfo) {
         }
         else {
             Perl_warn(aTHX_ "%s::BEST_INDEX method has corrupted constraint data structure",
-                      sv_reftype(vtabsv, 1));
+                      sv_reftype(SvRV(vtabsv), 1));
             rc = SQLITE_ERROR;
             goto cleanup;
         }
@@ -473,8 +480,8 @@ perlEof(sqlite3_vtab_cursor* cur) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
 
     PUTBACK;
     count = call_method("EOF", G_SCALAR|G_EVAL);
@@ -486,7 +493,7 @@ perlEof(sqlite3_vtab_cursor* cur) {
     PUTBACK;
 
     if (SvTRUE(ERRSV)) {
-        Perl_warn(aTHX_ "%s::EOF method failed: %s", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV));
+        Perl_warn(aTHX_ "%s::EOF method failed: %s", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV));
         rc = 1;
         goto cleanup;
     }
@@ -514,17 +521,16 @@ perlNext(sqlite3_vtab_cursor* cur) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
     PUTBACK;
     count = call_method("NEXT", G_SCALAR|G_EVAL);
     SPAGAIN;
-
     SP -= count;
     PUTBACK;
 
     if (SvTRUE(ERRSV)) {
-        Perl_warn(aTHX_ "%s::NEXT method failed: %s", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV));
+        Perl_warn(aTHX_ "%s::NEXT method failed: %s", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
     }
 
@@ -550,22 +556,21 @@ perlColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int n) {
     SAVETMPS;
 
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
-    PUSHs(sv_2mortal(newSViv(n)));
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
+    XPUSHs(sv_2mortal(newSViv(n)));
     PUTBACK;
     count = call_method("COLUMN", G_SCALAR|G_EVAL);
     SPAGAIN;
-
     SP -= count;
     ax = (SP - PL_stack_base) + 1;
-    sv = ST(0);
     PUTBACK;
+    sv = ST(0);
 
     if (SvTRUE(ERRSV)) {
         STRLEN len;
         char *str;
-        SV *err = sv_2mortal(newSVpvf("%s::COLUMN method failed: %s", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV)));
+        SV *err = sv_2mortal(newSVpvf("%s::COLUMN method failed: %s", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV)));
         str = SvPVutf8(err, len);
         sqlite3_result_error(ctx, str, len);
         rc = SQLITE_ERROR;
@@ -644,14 +649,14 @@ perlFilter(sqlite3_vtab_cursor *cur,
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
-    PUSHs(sv_2mortal(newSViv(idxNum)));
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
+    XPUSHs(sv_2mortal(newSViv(idxNum)));
     tmp = sv_2mortal(newSVpv(idxStr, 0));
     SvUTF8_on(tmp);
-    PUSHs(tmp);
+    XPUSHs(tmp);
     for (i = 0; i < argc; i++)
-        PUSHs(sv_2mortal(newSVsqlite3_value(aTHX_ argv[i])));
+        XPUSHs(sv_2mortal(newSVsqlite3_value(aTHX_ argv[i])));
     PUTBACK;
     count = call_method("FILTER", G_VOID|G_EVAL);
     SPAGAIN;
@@ -659,7 +664,7 @@ perlFilter(sqlite3_vtab_cursor *cur,
     PUTBACK;
 
     if (SvTRUE(ERRSV)) {
-        Perl_warn(aTHX_ "%s::FILTER method failed: %s", sv_reftype(vtabsv, 1), SvPV_nolen(ERRSV));
+        Perl_warn(aTHX_ "%s::FILTER method failed: %s", sv_reftype(SvRV(vtabsv), 1), SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
     }
 
@@ -685,19 +690,19 @@ perlRowid(sqlite3_vtab_cursor *cur, sqlite_int64 *rowid) {
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    PUSHs(vtabsv);
-    PUSHs(cursv);
+    XPUSHs(vtabsv);
+    XPUSHs(cursv);
 
     PUTBACK;
     count = call_method("ROWID", G_SCALAR|G_EVAL);
     SPAGAIN;
+    ax = (SP - PL_stack_base) + 1;
     SP -= count;
-    rowidsv = ST(0);
     PUTBACK;
-
+    rowidsv = ST(0);
     if (!count || SvTRUE(ERRSV) || !SvOK(rowidsv)) {
         Perl_warn(aTHX_ "%s::ROWID method failed: %s",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   SvTRUE(ERRSV) ? SvPV_nolen(ERRSV) : "method returned undef");
         rc = SQLITE_ERROR;
         goto cleanup;
@@ -731,23 +736,24 @@ perlUpdate(sqlite3_vtab *vtab, int argc, sqlite3_value **argv, sqlite_int64 *row
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    PUSHs(vtabsv);
+    XPUSHs(vtabsv);
     for (i = 0; i < argc; i++)
-        PUSHs(sv_2mortal(newSVsqlite3_value(aTHX_ argv[i])));
+        XPUSHs(sv_2mortal(newSVsqlite3_value(aTHX_ argv[i])));
     PUTBACK;
     count = call_method("UPDATE", G_SCALAR|G_EVAL);
     SPAGAIN;
     SP -= count;
+    ax = (SP - PL_stack_base) + 1;
     PUTBACK;
 
     if (!count || SvTRUE(ERRSV)) {
         Perl_warn(aTHX_ "%s::UPDATE method failed: %s\n",
-                  sv_reftype(vtabsv, 1),
+                  sv_reftype(SvRV(vtabsv), 1),
                   SvPV_nolen(ERRSV));
         rc = SQLITE_ERROR;
         goto cleanup;
-    }
-    
+    }    
+    rowidsv = ST(0);
     if (!SvOK(rowidsv))
         *rowid = 0;
     else if (SvUOK(rowidsv))
@@ -763,8 +769,44 @@ cleanup:
     return rc;
 }
 
+static int
+perlRename(sqlite3_vtab *vtab, const char *name) {
+     my_dTHX(((perl_vtab*)vtab)->perl);
+    dSP;
+    I32 ax;
+    SV *vtabsv = ((perl_vtab*)vtab)->sv;
+    int count;
+    int rc = SQLITE_OK;
+    ENTER;
+    SAVETMPS;
+    PUSHMARK(SP);
+    XPUSHs(vtabsv);
+    XPUSHs(sv_2mortal(newSVpv(name, 0)));
+    PUTBACK;
+    count = call_method("RENAME", G_SCALAR|G_EVAL);
+    SPAGAIN;
+    SP -= count;
+    ax = (SP - PL_stack_base) + 1;
+    PUTBACK;
+
+    if (!count || SvTRUE(ERRSV)) {
+        Perl_warn(aTHX_ "%s::RENAME method failed: %s\n",
+                  sv_reftype(SvRV(vtabsv), 1),
+                  SvPV_nolen(ERRSV));
+        rc = SQLITE_ERROR;
+        goto cleanup;
+    }    
+    rc = (SvTRUE(ST(0)) ? SQLITE_OK : SQLITE_ERROR);
+
+cleanup:
+    FREETMPS;
+    LEAVE;
+    return rc;
+}
+
+
 sqlite3_module perlModule = {
-    0,
+    1,
     perlCreate,
     perlConnect,
     perlBestIndex,
@@ -782,12 +824,14 @@ sqlite3_module perlModule = {
     perlSync,
     perlCommit,
     perlRollback,
+    NULL, /* perlFindFunction - not implemented yet! */
+    perlRename,
 };
 
 static char *argv[] = { "perlvtab",
-                        "-e",
-                        "require SQLite::VirtualTable;\n",
-                        NULL };
+			"-e",
+			"require SQLite::VirtualTable;\n",
+			NULL };
 
 EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
 
@@ -801,9 +845,12 @@ int sqlite3_extension_init(sqlite3 *db, char **pzErrMsg,
                            const sqlite3_api_routines *pApi) {
 
     PerlInterpreter *my_perl = perl_alloc();
-    PERL_SYS_INIT3(3, argv, NULL);
+    int ac = 3;
+    char **av = argv;
+    char **env = environ;
+    PERL_SYS_INIT3(&ac, &av, &env);
     perl_construct(my_perl);
-    perl_parse(my_perl, xs_init, 3, argv, environ);
+    perl_parse(my_perl, xs_init, ac, av, env);
     perl_run(my_perl);
 
     SQLITE_EXTENSION_INIT2(pApi)

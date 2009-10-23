@@ -69,7 +69,7 @@ sub BEST_INDEX {
 
 sub OPEN {
     # warn "OPEN";
-    return [];
+    return [0];
 }
 
 sub FILTER {
@@ -120,8 +120,9 @@ sub COLUMN {
 }
 
 sub ROWID {
-    # warn "ROWID";
     my ($self, $cur) = @_;
+    warn "ROWID [cur: @$cur]";
+
     $cur->[0];
 }
 
