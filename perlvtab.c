@@ -8,13 +8,18 @@
 #define NEED_sv_2pv_nolen
 #include "ppport.h" 
 
-#include <sqlite3ext.h>
+#include "perlvtab.h"
+
 SQLITE_EXTENSION_INIT1
 
 #ifdef MULTIPLICITY
-#  define my_dTHX(a) pTHXx = ((PerlInterpreter*)(a))
+#  define my_dTHX(a) pTHXx = ((PerlInterpreter*)((a) ? (a) : PERL_GET_THX))
 #else
 #  define my_dTHX(a) dNOOP
+#endif
+
+#ifdef __APPLE__
+extern char **environ;
 #endif
 
 typedef struct _perl_vtab {
@@ -77,7 +82,7 @@ perlCreateOrConnect(sqlite3 *db,
     ENTER;
     SAVETMPS;
     PUSHMARK(SP);
-    XPUSHs(sv_2mortal(newSVpv("SQLite::VirtualTable", 0)));
+    XPUSHs(sv_2mortal(newSVpv(VTAB_MODULE_LOADER, 0)));
     XPUSHs(sv_2mortal(newSVpv(vtm_name[method], 0)));
 
     for (i = 0; i<argc; i++) {
@@ -94,7 +99,8 @@ perlCreateOrConnect(sqlite3 *db,
     PUTBACK;
     vtabsv = ST(0);
     if (!count || SvTRUE(ERRSV) || !SvOK(vtabsv)) {
-        Perl_warn(aTHX_  "SQLite::VirtualTable::%s method failed: %s\n",
+        Perl_warn(aTHX_  "%s::%s method failed: %s\n",
+		  VTAB_MODULE_LOADER,
                   vtm_name[method],
                   SvTRUE(ERRSV) ? SvPV_nolen(ERRSV) : "method returned undef");
         rc = SQLITE_ERROR;
@@ -805,7 +811,7 @@ cleanup:
 }
 
 
-sqlite3_module perlModule = {
+sqlite3_module vtab_perl_module = {
     1,
     perlCreate,
     perlConnect,
@@ -830,7 +836,8 @@ sqlite3_module perlModule = {
 
 static char *argv[] = { "perlvtab",
 			"-e",
-			"require SQLite::VirtualTable;\n",
+			"$SQLite::VirtualTable::EMBEDED=1;"
+			"require SQLite::VirtualTable",
 			NULL };
 
 EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
@@ -855,6 +862,14 @@ int sqlite3_extension_init(sqlite3 *db, char **pzErrMsg,
 
     SQLITE_EXTENSION_INIT2(pApi)
 
-    sqlite3_create_module(db, "perl", &perlModule, my_perl);
+    sqlite3_create_module(db, "perl", &vtab_perl_module, my_perl);
+    return SQLITE_OK;
+}
+
+int dbd_sqlite_init_vtab_extension(sqlite3 *db, char **pzErrMsg, 
+				   const sqlite3_api_routines *pApi) {
+    SQLITE_EXTENSION_INIT2(pApi)
+
+    sqlite3_create_module(db, "perl", &vtab_perl_module, NULL);
     return SQLITE_OK;
 }
