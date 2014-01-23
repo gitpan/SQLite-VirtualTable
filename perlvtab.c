@@ -46,6 +46,20 @@ typedef struct _perl_vtab_cursor {
 #define VTM_COMMIT_TRANSACTION 6
 #define VTM_ROLLBACK_TRANSACTION 7
 
+EXTERN_C void xs_init (pTHX);
+
+EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
+
+EXTERN_C void
+xs_init(pTHX)
+{
+	char *file = __FILE__;
+	dXSUB_SYS;
+
+	/* DynaLoader is a special case */
+	newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
+}
+
 
 static char *vtm_name[] = { "CREATE", 
                             "CONNECT",
@@ -840,28 +854,17 @@ static char *argv[] = { "perlvtab",
 			"require SQLite::VirtualTable",
 			NULL };
 
-EXTERN_C void boot_DynaLoader (pTHX_ CV* cv);
-
-static void
-xs_init(pTHX) {
-    char *file = __FILE__;
-    newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
-}
-
 int sqlite3_extension_init(sqlite3 *db, char **pzErrMsg, 
                            const sqlite3_api_routines *pApi) {
 
-    PerlInterpreter *my_perl = Perl_get_context();
-    if (my_perl == NULL) {
-      my_perl = perl_alloc();
-      int ac = 3;
-      char **av = argv;
-      char **env = environ;
-      PERL_SYS_INIT3(&ac, &av, &env);
-      perl_construct(my_perl);
-      perl_parse(my_perl, xs_init, ac, av, env);
-      perl_run(my_perl);
-    }
+    PerlInterpreter *my_perl = perl_alloc();
+    int ac = 3;
+    char **av = argv;
+    char **env = environ;
+    PERL_SYS_INIT3(&ac, &av, &env);
+    perl_construct(my_perl);
+    perl_parse(my_perl, xs_init, ac, av, env);
+    perl_run(my_perl);
 
     SQLITE_EXTENSION_INIT2(pApi)
 
